@@ -28,8 +28,8 @@ public class AuditController {
 
     @GetMapping("/two-log-by-time")
     public String auditTwoLogByTime(long from, long to) throws IOException {
-        File inputDir = new File("C:\\Project\\balance-transaction\\target\\logs\\input\\2020-08-Copy");
-        File processDir = new File("C:\\Project\\balance-transaction\\target\\logs\\redis\\1\\2020-08-Copy");
+        File inputDir = new File("C:\\Project\\audi-log-service\\src\\main\\resources\\logs\\input");
+        File processDir = new File("C:\\Project\\audi-log-service\\src\\main\\resources\\logs\\redis");
         service.auditTwoLogByTime(inputDir, processDir, from, to);
         return "OK";
     }

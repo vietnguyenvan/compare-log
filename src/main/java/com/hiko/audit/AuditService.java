@@ -1,5 +1,6 @@
 package com.hiko.audit;
 
+import org.apache.commons.io.FileUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.util.Strings;
@@ -8,10 +9,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.*;
 import java.text.SimpleDateFormat;
-import java.util.Arrays;
-import java.util.Date;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
@@ -72,7 +70,6 @@ public class AuditService {
             readLogFinish.await();
             logger.info("End of comparing ");
             List<String> result = sourceLogs.parallelStream().filter(e -> !destLogs.contains(e)).collect(Collectors.toList());
-            sourceLogs.removeAll(destLogs);
             FileWriter writer = new FileWriter("./output.txt", false);
             result.stream().forEach(e -> {
                 try {
@@ -138,50 +135,53 @@ public class AuditService {
     }
 
     private void readFile(File directory, long from, long to, List<String> results) {
-        File[] listFile = directory.listFiles();
-        if (listFile == null || listFile.length == 0) {
+        Collection<File> listFile = FileUtils.listFiles(directory, new String[]{"log"}, true);
+
+        if (listFile == null || listFile.size() == 0) {
             new RuntimeException("No any log file in directory: " + directory.getAbsolutePath());
         }
-        Arrays.asList(listFile).parallelStream().forEach(file -> {
-            if (file.isFile() && file.getName().endsWith(".log")) {
-                logger.info("read file {}", file.getName());
-                BufferedReader br = null;
-                try {
-                    FileInputStream fstream = new FileInputStream(file);
-                    DataInputStream in = new DataInputStream(fstream);
-                    br = new BufferedReader(new InputStreamReader(in));
-                    SimpleDateFormat simpleDateFormat = new SimpleDateFormat(datePattern);
-                    String strLine;
-                    while ((strLine = br.readLine()) != null) {
-                        Date time = getTime(strLine, simpleDateFormat);
-                        if (time == null) continue;
-                        if (to < time.getTime()) {
-                            logger.info("Over range time: {}, file {}", time, file.getCanonicalPath());
-                            break;
-                        }
-                        if (from <= time.getTime() && to >= time.getTime()) {
-                            results.add(getRequestId(strLine));
-                        }
+
+        listFile.parallelStream().forEach(file -> {
+            logger.info("read file {}", file.getName());
+            BufferedReader br = null;
+            try {
+                FileInputStream fstream = new FileInputStream(file);
+                DataInputStream in = new DataInputStream(fstream);
+                br = new BufferedReader(new InputStreamReader(in));
+                SimpleDateFormat simpleDateFormat = new SimpleDateFormat(datePattern);
+                String strLine;
+                while ((strLine = br.readLine()) != null) {
+                    Date time = getTime(strLine, simpleDateFormat);
+                    if (time == null) continue;
+                    if (to < time.getTime()) {
+                        logger.info("Over range time: {}, file {}", time, file.getCanonicalPath());
+                        break;
                     }
-                    in.close();
-                } catch (FileNotFoundException e) {
-                    e.printStackTrace();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                } finally {
-                    if (br != null)
-                        try {
-                            br.close();
-                        } catch (IOException e) {
-                            e.printStackTrace();
-                        }
+                    if (from <= time.getTime() && to >= time.getTime()) {
+                        String rid = getRequestId(strLine);
+                        if (rid == null) continue;
+                        results.add(getRequestId(strLine));
+                    }
                 }
+                in.close();
+            } catch (FileNotFoundException e) {
+                e.printStackTrace();
+            } catch (IOException e) {
+                e.printStackTrace();
+            } finally {
+                if (br != null)
+                    try {
+                        br.close();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
             }
         });
     }
 
     private String getRequestId(String line) {
         String msg = line.trim().substring(line.indexOf(" ", line.indexOf(" ") + 1));
+        if (msg.indexOf("|") < 0) return null;
         return msg.substring(0, msg.indexOf("|"));
     }
 
