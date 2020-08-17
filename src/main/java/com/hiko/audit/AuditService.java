@@ -12,7 +12,9 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 public class AuditService {
@@ -35,24 +37,23 @@ public class AuditService {
     }
 
     public void auditTwoLogByTime(File sourceLogDir, File destLogDir, long from, long to) throws IOException {
-        List<String> sourceLogs = new LinkedList<>();
-        List<String> destLogs = new LinkedList<>();
+         AtomicReference<List<String>> sourceLogs = new AtomicReference<>();
+         AtomicReference<Map<String, String>> destLogs = new AtomicReference<>();
         CountDownLatch readLogFinish = new CountDownLatch(2);
-        Thread a = new Thread(() -> {
+        Thread sourceReaderThread = new Thread(() -> {
             logger.info("Reading file in {}", sourceLogDir);
-            readFile(sourceLogDir, from, to, sourceLogs);
-            logger.info("Ending reading source logs with size: {}", sourceLogs.size());
+            sourceLogs.set(readFile(sourceLogDir, from, to).collect(Collectors.toList()));
+            logger.info("Ending reading source logs with size: {}", sourceLogs.get().size());
             readLogFinish.countDown();
         });
-        a.start();
-        Thread b = new Thread(() -> {
+        sourceReaderThread.start();
+        Thread destReaderThread = new Thread(() -> {
             logger.info("Reading file in {}", destLogDir);
-            readFile(destLogDir, from, to + MINUTE * 10, destLogs);
-            logger.info("End of reading destination logs with size: {}", destLogs.size());
+            destLogs.set(readFile(destLogDir, from, to + MINUTE * 10).collect(Collectors.toMap(e -> e, e -> "")));
+            logger.info("End of reading destination logs with size: {}", destLogs.get().size());
             readLogFinish.countDown();
-
         });
-        b.start();
+        destReaderThread.start();
 
 //        new Thread(() -> {
 ////            logger.info("Remove match records ...");
@@ -68,8 +69,11 @@ public class AuditService {
 
         try {
             readLogFinish.await();
-            logger.info("End of comparing ");
-            List<String> result = sourceLogs.parallelStream().filter(e -> !destLogs.contains(e)).collect(Collectors.toList());
+            logger.info("start of comparing ");
+            Map<String, String> dest = destLogs.get();
+            List<String> source = sourceLogs.get();
+            List<String> result = source.stream().filter(e -> !dest.containsKey(e)).collect(Collectors.toList());
+            logger.info("end of comparing with {} missing request", result.size());
             FileWriter writer = new FileWriter("./output.txt", false);
             result.stream().forEach(e -> {
                 try {
@@ -78,6 +82,7 @@ public class AuditService {
                     ex.printStackTrace();
                 }
             });
+            writer.close();
             logger.info("Finished ...");
         } catch (InterruptedException e) {
             e.printStackTrace();
@@ -134,14 +139,15 @@ public class AuditService {
         }
     }
 
-    private void readFile(File directory, long from, long to, List<String> results) {
+    private Stream<String> readFile(File directory, long from, long to) {
         Collection<File> listFile = FileUtils.listFiles(directory, new String[]{"log"}, true);
 
         if (listFile == null || listFile.size() == 0) {
             new RuntimeException("No any log file in directory: " + directory.getAbsolutePath());
         }
 
-        listFile.parallelStream().forEach(file -> {
+        return listFile.parallelStream().map(file -> {
+            List<String> logs = new LinkedList<>();
             logger.info("read file {}", file.getName());
             BufferedReader br = null;
             try {
@@ -160,7 +166,7 @@ public class AuditService {
                     if (from <= time.getTime() && to >= time.getTime()) {
                         String rid = getRequestId(strLine);
                         if (rid == null) continue;
-                        results.add(getRequestId(strLine));
+                        logs.add(getRequestId(strLine));
                     }
                 }
                 in.close();
@@ -176,7 +182,8 @@ public class AuditService {
                         e.printStackTrace();
                     }
             }
-        });
+            return logs;
+        }).flatMap(Collection::stream);
     }
 
     private String getRequestId(String line) {
